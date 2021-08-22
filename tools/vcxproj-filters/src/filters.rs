@@ -1,20 +1,13 @@
 use rand::Rng;
-use regex::Regex;
-//use std::collections::HashSet;
-//use std::fmt;
-//use std::fs;
-//use std::fs::metadata;
+use std::fs;
 use std::fs::File;
-//use std::io::BufRead;
-//use std::io::Read;
 use std::io::Write;
-//use std::io::{Error, ErrorKind};
-//use std::path::Path;
-//use std::path::PathBuf;
+use std::path::Path;
+use std::str;
 use std::str::FromStr;
-//use uuid::Uuid;
 use uuid::{Builder, Variant, Version};
-
+use xml::attribute::OwnedAttribute;
+use xml::reader::{EventReader, XmlEvent};
 struct Entry {
     kind: String,
     file: String,
@@ -54,157 +47,241 @@ struct Filters {
     item_groups: Vec<Group>,
 }
 
+fn get_include_value(attributes: &Vec<OwnedAttribute>) -> Result<String, std::io::Error> {
+    match attributes.iter().find(|&r| r.name.local_name == "Include") {
+        Some(val) => Ok(val.value.to_string().clone()),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "No include in filter element",
+        )),
+    }
+}
+
 fn read_filters<R: std::io::BufRead>(stream: &mut R) -> Result<Filters, std::io::Error> {
-    let re_filter = Regex::new("\\s*<Filter Include=\"(.*)\">").unwrap();
-    let re_uid = Regex::new("\\s*<UniqueIdentifier>\\{(.*)\\}</UniqueIdentifier>").unwrap();
-    let re_generic_file = Regex::new("\\s*<(.*) Include=\"(.*)\"\\s?/?>").unwrap();
-    let re_generic_filter = Regex::new("\\s*<Filter>(.*)</Filter>").unwrap();
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf)?;
+
+    // Remove the BOM, waiting for better implementation
+    if buf.starts_with(&[0xef, 0xbb, 0xbf]) {
+        buf.drain(0..3);
+    }
+
+    let tmp_data = String::from_utf8(buf).unwrap_or_default();
+    let mut parser = EventReader::from_str(tmp_data.as_str());
 
     let mut data = Filters {
         filters: vec![],
         item_groups: vec![],
     };
-    let mut buf = String::new();
-    loop {
-        stream.read_line(&mut buf)?;
-        if buf.starts_with("<Project") {
-            break;
-        }
-        buf.clear();
+
+    #[derive(PartialEq)]
+    enum State {
+        Unknown,
+        NewGroup,
+        FilterGroup,
+        FilterItem,
+        FilterUID,
+        ItemGroup,
+        ItemGroupItem(String),
+        ItemGroupItemFilter(String),
     }
-    buf.clear();
 
-    // Read path item group
-    stream.read_line(&mut buf)?;
-    if buf.trim() == "<ItemGroup>" {
-        let mut uid = String::new();
-        let mut path = String::new();
-
-        // Filters path
-        loop {
-            buf.clear();
-            stream.read_line(&mut buf)?;
-            if buf.trim() == "</ItemGroup>" {
-                break;
-            }
-            match re_filter.captures(&buf) {
-                Some(caps) => path = caps[1].to_string(),
-                None => match re_uid.captures(&buf) {
-                    Some(caps) => uid = caps[1].to_string(),
-                    None => {
-                        if buf.trim() == "</Filter>" {
-                            data.filters.push(Filter {
-                                path: path.to_string(),
-                                unique_id: uid.to_string(),
-                                used: false,
-                            });
-                        }
-                    }
-                },
-            }
-        }
-        let mut gen_file: Option<String> = None;
-        let mut gen_kind: Option<String> = None;
-        let mut gen_filter: Option<String> = None;
-        loop {
-            buf.clear();
-            stream.read_line(&mut buf)?;
-            if buf.trim() == "</Project>" {
-                break;
-            }
-            if buf.trim() == "<ItemGroup>" {
-                data.item_groups.push(Group::new());
-                loop {
-                    buf.clear();
-                    stream.read_line(&mut buf)?;
-                    if buf.trim() == "</ItemGroup>" {
-                        break;
-                    }
-
-                    match re_generic_file.captures(&buf) {
-                        Some(caps) => {
-                            gen_kind = Some(caps[1].to_string());
-                            gen_file = Some(caps[2].to_string());
-                            if buf.trim().ends_with("/>") {
-                                data.item_groups.last_mut().unwrap().entries.push(Entry {
-                                    kind: gen_kind.unwrap(),
-                                    file: gen_file.unwrap(),
-                                    filter: gen_filter,
-                                    used: false,
-                                });
-                                gen_kind = None;
-                                gen_file = None;
-                                gen_filter = None;
-                            }
-                        }
-                        None => match re_generic_filter.captures(&buf) {
-                            Some(caps) => gen_filter = Some(caps[1].to_string()),
-                            None => {
-                                if gen_kind.is_some()
-                                    && buf.trim() == format!("</{}>", gen_kind.as_ref().unwrap())
-                                {
-                                    data.item_groups.last_mut().unwrap().entries.push(Entry {
-                                        kind: gen_kind.unwrap(),
-                                        file: gen_file.unwrap(),
-                                        filter: gen_filter,
-                                        used: false,
-                                    });
-                                    gen_kind = None;
-                                    gen_file = None;
-                                    gen_filter = None;
-                                }
-                            }
-                        },
+    let mut state = State::Unknown;
+    loop {
+        let e = parser.next();
+        match e {
+            Ok(XmlEvent::StartElement {
+                ref name,
+                ref attributes,
+                ..
+            }) => {
+                if state == State::NewGroup {
+                    if name.local_name == "Filter" {
+                        state = State::FilterGroup;
+                    } else {
+                        state = State::ItemGroup;
+                        data.item_groups.push(Group::new());
                     }
                 }
+                match state {
+                    State::Unknown => {
+                        if name.local_name == "ItemGroup" {
+                            state = State::NewGroup;
+                        }
+                    }
+                    State::FilterGroup => {
+                        state = State::FilterItem;
+                        data.filters.push(Filter::new());
+                        data.filters.last_mut().unwrap().path = get_include_value(&attributes)?;
+                    }
+                    State::NewGroup => { // managed before the match
+                    }
+                    State::FilterItem => {
+                        if name.local_name == "UniqueIdentifier" {
+                            state = State::FilterUID;
+                        }
+                    }
+                    State::FilterUID => {}
+                    State::ItemGroup => {
+                        state = State::ItemGroupItem(name.local_name.to_string().clone());
+                        data.item_groups
+                            .last_mut()
+                            .unwrap()
+                            .entries
+                            .push(Entry::new(
+                                name.local_name.as_str(),
+                                get_include_value(&attributes)?.as_str(),
+                            ));
+                    }
+                    State::ItemGroupItem(ref item) => {
+                        if name.local_name == "Filter" {
+                            state = State::ItemGroupItemFilter(item.to_string().clone());
+                        }
+                    }
+                    State::ItemGroupItemFilter(..) => {}
+                };
             }
+            Ok(XmlEvent::Characters(ref chars)) => match state {
+                State::FilterUID => {
+                    data.filters.last_mut().unwrap().unique_id = chars.to_string().clone()
+                }
+                State::ItemGroupItemFilter(..) => {
+                    data.item_groups
+                        .last_mut()
+                        .unwrap()
+                        .entries
+                        .last_mut()
+                        .unwrap()
+                        .filter = Some(chars.to_string().clone())
+                }
+                _ => {}
+            },
+            Ok(XmlEvent::EndElement { ref name }) => {
+                match state {
+                    State::FilterGroup => {
+                        if name.local_name == "ItemGroup" {
+                            state = State::Unknown;
+                        }
+                    }
+                    State::NewGroup => {
+                        state = State::Unknown;
+                    }
+                    State::FilterItem => {
+                        if name.local_name == "Filter" {
+                            state = State::FilterGroup;
+                        }
+                    }
+                    State::FilterUID => {
+                        if name.local_name == "UniqueIdentifier" {
+                            state = State::FilterItem;
+                        }
+                    }
+                    State::ItemGroup => {
+                        if name.local_name == "ItemGroup" {
+                            state = State::Unknown;
+                        }
+                    }
+                    State::ItemGroupItem(ref item) => {
+                        if name.local_name == item.as_str() {
+                            state = State::ItemGroup;
+                        }
+                    }
+                    State::ItemGroupItemFilter(ref item) => {
+                        state = State::ItemGroupItem(item.to_string().clone());
+                    }
+                    State::Unknown => {}
+                };
+            }
+            Ok(XmlEvent::EndDocument) => break,
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    e.clone(),
+                ))
+            }
+            _ => {}
         }
     }
 
     Ok(data)
 }
 
+fn file_filter(file: &str) -> Option<String> {
+    match file.rfind('\\') {
+        Some(val) => Some(String::from_str(&file[0..val]).unwrap()),
+        None => Option::None,
+    }
+}
+
 fn read_vcxproj<R: std::io::BufRead>(stream: &mut R) -> Result<Vec<Entry>, std::io::Error> {
-    let re_file = Regex::new("\\s*<(.*) Include=\"(.*)\"").unwrap();
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf)?;
+
+    // Remove the BOM, waiting better implementation
+    if buf.starts_with(&[0xef, 0xbb, 0xbf]) {
+        buf.drain(0..3);
+    }
+
+    let a = String::from_utf8(buf).unwrap_or_default();
+    let parser = EventReader::from_str(a.as_str());
 
     let mut res: Vec<Entry> = vec![];
 
-    let mut buf = String::new();
-    loop {
-        buf.clear();
-        if stream.read_line(&mut buf).unwrap_or(0) == 0 {
-            break;
-        }
-        match re_file.captures(&buf) {
-            Some(caps) => {
-                let kind = caps[1].to_string();
-                let file = caps[2].to_string();
-                if kind == "ProjectReference" || kind == "ProjectConfiguration" {
-                    continue;
-                }
-                match file.rfind('\\') {
-                    Some(val) => res.push(Entry {
-                        kind: kind.clone(),
-                        file: file.clone(),
-                        filter: Some(String::from_str(&file[0..val]).unwrap()),
-                        used: false,
-                    }),
-                    None => res.push(Entry {
-                        kind: kind.clone(),
-                        file: file.clone(),
-                        filter: Option::None,
-                        used: false,
-                    }),
+    for e in parser {
+        match e {
+            Ok(XmlEvent::StartElement {
+                name, attributes, ..
+            }) => {
+                for a in &attributes {
+                    if a.name.local_name == "Include" {
+                        if name.local_name != "ProjectReference"
+                            && name.local_name != "ProjectConfiguration"
+                        {
+                            res.push(Entry::new(name.local_name.as_str(), a.value.as_str()));
+                        }
+                    }
                 }
             }
-            None => {}
+            Err(e) => {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, e.clone());
+                break;
+            }
+            _ => {}
         }
     }
 
     Ok(res)
 }
 
+impl Entry {
+    fn new(kind: &str, filename: &str) -> Entry {
+        Entry {
+            kind: String::from_str(kind).unwrap(),
+            file: String::from_str(filename).unwrap(),
+            filter: file_filter(filename),
+            used: true,
+        }
+    }
+}
+
+impl Filter {
+    fn new() -> Filter {
+        Filter {
+            path: String::new(),
+            unique_id: String::new(),
+            used: false,
+        }
+    }
+}
+
 impl Filters {
+    fn new() -> Filters {
+        Filters {
+            filters: vec![],
+            item_groups: vec![],
+        }
+    }
+
     fn add_filter_only(&mut self, filter: &str) {
         let mut found = false;
         for f in &mut self.filters {
@@ -229,8 +306,10 @@ impl Filters {
     }
 
     fn add_filter(&mut self, entry: &Entry) {
-        let a = entry.filter.as_ref().unwrap();
-        self.add_filter_only(&a);
+        if entry.filter.as_ref().is_some(){
+            let a = entry.filter.as_ref().unwrap();
+            self.add_filter_only(&a);
+        }
 
         let mut found = false;
         for group in &mut self.item_groups {
@@ -283,6 +362,7 @@ fn get_extension(filename: &str) -> Option<String> {
 fn generate_new_filters(
     old_filters: &mut Filters,
     files: &Vec<Entry>,
+    sort: bool,
 ) -> Result<Filters, std::io::Error> {
     let mut new_filters = Filters {
         filters: vec![],
@@ -290,9 +370,7 @@ fn generate_new_filters(
     };
 
     for entry in files {
-        if entry.filter.is_some() {
-            old_filters.add_filter(entry);
-        }
+        old_filters.add_filter(entry);
     }
 
     for filter in &old_filters.filters {
@@ -318,19 +396,23 @@ fn generate_new_filters(
             }
         }
         if !v.is_empty() {
-            v.sort_by(|a, b| a.file.cmp(&b.file));
+            if sort {
+                v.sort_by(|a, b| a.file.cmp(&b.file));
+            }
             new_filters.item_groups.push(Group::from_vec(v));
         }
     }
 
-    new_filters.item_groups.sort_by(|a, b| a.ext.cmp(&b.ext));
+    if sort {
+        new_filters.item_groups.sort_by(|a, b| a.ext.cmp(&b.ext));
 
-    new_filters.filters.sort_by(|a, b| a.path.cmp(&b.path));
+        new_filters.filters.sort_by(|a, b| a.path.cmp(&b.path));
+    }
 
     Ok(new_filters)
 }
 
-fn write_new_filters(filters: &Filters, filename: &str) -> Result<(), std::io::Error> {
+fn write_filters(filters: &Filters, filename: &str) -> Result<(), std::io::Error> {
     let file = File::create(filename)?;
 
     let mut buffer = std::io::BufWriter::new(file);
@@ -344,7 +426,7 @@ fn write_new_filters(filters: &Filters, filename: &str) -> Result<(), std::io::E
             write!(buffer, "    <Filter Include=\"{}\">\r\n", filter.path)?;
             write!(
                 buffer,
-                "      <UniqueIdentifier>{{{}}}</UniqueIdentifier>\r\n",
+                "      <UniqueIdentifier>{}</UniqueIdentifier>\r\n",
                 filter.unique_id
             )?;
             write!(buffer, "    </Filter>\r\n")?;
@@ -382,32 +464,83 @@ fn urn_uuid() -> String {
     let mut buf = [b'!'; 49];
     uuid.to_urn().encode_lower(&mut buf);
 
-    String::from_utf8(buf[9..41].to_vec()).unwrap()
+    format!("{{{}}}", str::from_utf8(&buf[9..41]).unwrap())
 }
 
-pub fn manage(
+pub fn apply(
     vcxproj_file: &str,
-    filters_file: Option<&str>,
-    new_filters_file: Option<&str>,
+    filters_file: Option<String>,
+    new_filters_file: Option<String>,
+    sort: bool,
+    verbose: bool,
 ) -> Result<(), std::io::Error> {
-
-    let filters_file = match filters_file {
-        Some(val)=> String::from_str(val).unwrap(),
+    let output_file = match new_filters_file {
+        Some(val) => val,
         None => format!("{}.filters", vcxproj_file),
     };
 
-    let output_file = match new_filters_file {
-        Some(val)=> String::from_str(val).unwrap(),
-        None => filters_file.to_string(),
+    let mut input_filters = match filters_file {
+        Some(filename) => match Path::new(filename.as_str()).is_file() {
+            true => {
+                if verbose {
+                    println!("Reading filters file \"{}\"...", filename);
+                }
+                read_filters(&mut std::io::BufReader::new(File::open(filename)?))?
+            }
+            false => {
+                println!(
+                    "Filters file \"{}\" doesn't exist, will starting from empty filters",
+                    filename
+                );
+                Filters::new()
+            }
+        },
+        None => {
+            if verbose {
+                println!("Starting from empty filters");
+            }
+            Filters::new()
+        }
     };
 
-    let file = File::open(filters_file)?;
+    if verbose {
+        println!("Reading vcproj file \"{}\"...", vcxproj_file);
+    }
 
-    let mut u = read_filters(&mut std::io::BufReader::new(file))?;
-    let v = read_vcxproj(&mut std::io::BufReader::new(File::open(vcxproj_file)?))?;
+    let vcxproj_files = read_vcxproj(&mut std::io::BufReader::new(File::open(vcxproj_file)?))?;
 
-    let res = generate_new_filters(&mut u, &v)?;
+    if verbose {
+        println!("Generating new filters...");
+    }
+    let new_filters = generate_new_filters(&mut input_filters, &vcxproj_files, sort)?;
 
-    write_new_filters(&res, output_file.as_str())?;
+    if verbose {
+        println!("Writing new filters to file \"{}\"...", output_file);
+    }
+    write_filters(&new_filters, output_file.as_str())?;
+
     Ok(())
+}
+
+pub fn find_vcxproj(verbose: bool) -> Vec<String> {
+    if verbose {
+        println!("Searching for vcxproj files in current folder");
+    }
+
+    let mut result: Vec<String> = vec![];
+    let paths = fs::read_dir(".").unwrap();
+    for path in paths {
+        if verbose {}
+        if path.is_ok() {
+            let value = path.unwrap().path();
+            if value.is_file() && value.extension().unwrap_or_default() == "vcxproj" {
+                println!("Found vcxproj file \"{}\"", value.to_str().unwrap());
+                result.push(String::from_str(value.to_str().unwrap()).unwrap())
+            } else if verbose {
+                println!("Ignoring entry \"{}\"", value.to_str().unwrap());
+            }
+        }
+    }
+
+    result
 }
