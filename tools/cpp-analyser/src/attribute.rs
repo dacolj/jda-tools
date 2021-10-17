@@ -2,22 +2,27 @@ use crate::common::*;
 
 use std::fs::File;
 use std::io::BufReader;
-use xml::reader::{EventReader, XmlEvent};
+use xml::{
+    attribute::OwnedAttribute,
+    reader::{EventReader, XmlEvent},
+};
 
-
+#[derive(Debug)]
 pub struct Attribute {
-    access: Access,
-    ctype: String,
-    name: String,
-    brief: Option<String>,
-    detailed: Option<String>,
-    location: Option<Location>,
+    pub access: Access,
+    pub is_static: bool,
+    pub ctype: String,
+    pub name: String,
+    pub brief: Option<String>,
+    pub detailed: Option<String>,
+    pub location: Option<Location>,
 }
 
-impl Attribute{
-    pub fn new(access: &Access) -> Attribute{
+impl Attribute {
+    pub fn new() -> Attribute {
         Attribute {
-            access : access.clone(),
+            access: Access::Private,
+            is_static: false,
             ctype: String::new(),
             name: String::new(),
             brief: Option::None,
@@ -26,28 +31,32 @@ impl Attribute{
         }
     }
 
-    pub  fn read(
-        access: &Access,
+    pub fn read(
         parser: &mut EventReader<BufReader<File>>,
+        xml_attributes: &Vec<OwnedAttribute>
     ) -> Result<Attribute, std::io::Error> {
+        let mut attr = Attribute::new();
 
-        let mut attr = Attribute::new(access);
+        attr.is_static = read_xml_attribute(xml_attributes, "static").unwrap_or_default() == "yes";
+        attr.access = match read_xml_attribute(xml_attributes, "prot"){
+            Some(val)=> access_from_str(val.as_str()).unwrap_or(Access::Private),
+            None => Access::Private,
+        };
+
         loop {
             match parser.next() {
                 Ok(XmlEvent::StartElement {
                     ref name,
                     ref attributes,
                     ..
-                }) => {
-                    match name.local_name.as_str() {
-                        "type" => attr.ctype = read_characters_only(parser)?,
-                        "name" => attr.name = read_characters_only(parser)?,
-                        "briefdescription" => attr.brief = Some(read_characters_only(parser)?),
-                        "detaileddescription" => println!("[INFO] Attribute detailed description not managed"),
-                        "location" =>attr.location = Some(Location::read(attributes)),
-                            _ => {},
-                    }
-                }
+                }) => match name.local_name.as_str() {
+                    "type" => attr.ctype = read_characters_only(parser)?,
+                    "name" => attr.name = read_characters_only(parser)?,
+                    "briefdescription" => attr.brief = Some(read_description(parser)?),
+                    "detaileddescription" => attr.detailed = Some(read_description(parser)?),
+                    "location" => attr.location = Some(Location::read(attributes)),
+                    _ => {}
+                },
                 Ok(XmlEvent::EndElement { ref name }) => {
                     if name.local_name == "memberdef" {
                         break;

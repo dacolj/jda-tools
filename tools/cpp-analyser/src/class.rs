@@ -8,12 +8,14 @@ use std::str;
 use xml::attribute::OwnedAttribute;
 use xml::reader::{EventReader, XmlEvent};
 
+#[derive(Debug)]
 pub struct Class {
-    name: String,
-    brief: Option<String>,
-    detailed: Option<String>,
-    attributes: Vec<Attribute>,
-    functions: Vec<Function>,
+    pub name: String,
+    pub brief: Option<String>,
+    pub detailed: Option<String>,
+    pub attributes: Vec<Attribute>,
+    pub functions: Vec<Function>,
+    pub location: Option<Location>,
 }
 
 impl Class {
@@ -24,6 +26,7 @@ impl Class {
             detailed: Option::None,
             attributes: Vec::new(),
             functions: Vec::new(),
+            location: Option::None,
         };
     }
 
@@ -55,14 +58,17 @@ impl Class {
 
     pub fn read_attributes(
         &mut self,
-        access: &Access,
         parser: &mut EventReader<BufReader<File>>,
     ) -> Result<(), std::io::Error> {
         loop {
             match parser.next() {
-                Ok(XmlEvent::StartElement { ref name, .. }) => {
+                Ok(XmlEvent::StartElement {
+                    ref name,
+                    ref attributes,
+                    ..
+                }) => {
                     if name.local_name == "memberdef" {
-                        self.attributes.push(Attribute::read(access, parser)?);
+                        self.attributes.push(Attribute::read(parser, attributes)?);
                     }
                 }
                 Ok(XmlEvent::EndElement { ref name }) => {
@@ -84,14 +90,13 @@ impl Class {
 
     pub fn read_functions(
         &mut self,
-        access: &Access,
         parser: &mut EventReader<BufReader<File>>,
     ) -> Result<(), std::io::Error> {
         loop {
             match parser.next() {
-                Ok(XmlEvent::StartElement { ref name, .. }) => {
+                Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => {
                     if name.local_name == "memberdef" {
-                        self.functions.push(Function::read(access, parser)?);
+                        self.functions.push(Function::read( parser, attributes)?);
                     }
                 }
                 Ok(XmlEvent::EndElement { ref name }) => {
@@ -121,23 +126,15 @@ impl Class {
                     ref name,
                     ref attributes,
                     ..
-                }) => {
-                    if name.local_name == "compoundname" {
-                        self.read_compound_name(parser)?;
-                    } else if name.local_name == "sectiondef" {
+                }) => match name.local_name.as_str() {
+                    "compoundname" => self.read_compound_name(parser)?,
+                    "sectiondef" => {
                         let kind = Class::get_kind_attr(attributes)?;
-                        if kind == "public-attrib" {
-                            self.read_attributes(&Access::Public, parser)?;
-                        } else if kind == "protected-attrib" {
-                            self.read_attributes(&Access::Protected, parser)?;
-                        } else if kind == "private-attrib" {
-                            self.read_attributes(&Access::Private, parser)?;
-                        } else if kind == "public-func" {
-                            self.read_functions(&Access::Public, parser)?;
-                        } else if kind == "protected-func" {
-                            self.read_functions(&Access::Protected, parser)?;
-                        } else if kind == "private-func" {
-                            self.read_functions(&Access::Private, parser)?;
+                        if kind.contains("-attrib") {
+                            self.read_attributes(parser)?;
+                        } else if kind.contains("-func") {
+                            self.read_functions(parser)?;
+                        } else if kind.contains("-type"){
                         } else {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
@@ -145,7 +142,11 @@ impl Class {
                             ));
                         }
                     }
-                }
+                    "briefdescription" => self.brief = Some(read_description(parser)?),
+                    "detaileddescription" => self.brief = Some(read_description(parser)?),
+                    "location" => self.location = Some(Location::read(attributes)),
+                    _ => {}
+                },
                 Ok(XmlEvent::EndElement { ref name }) => {
                     if name.local_name == "compounddef" {
                         break;
@@ -193,9 +194,8 @@ impl Class {
                 }
                 _ => {}
             }
-        };
+        }
 
         Ok(class)
     }
-
 }
