@@ -23,7 +23,7 @@ pub enum Direction {
 
 #[derive(Debug)]
 pub struct Location {
-    pub file: Option<String>,
+    pub file: String,
     pub line: i32,
 }
 
@@ -141,7 +141,7 @@ pub fn read_description(
 impl Location {
     fn new() -> Location {
         Location {
-            file: Option::None,
+            file: String::new(),
             line: -1,
         }
     }
@@ -153,8 +153,8 @@ impl Location {
         };
 
         let file = match attributes.iter().find(|&r| r.name.local_name == "file") {
-            Some(val) => Some(val.value.to_string().clone()),
-            None => Option::None,
+            Some(val) => val.value.to_string().clone(),
+            None => String::new(),
         };
 
         Location {

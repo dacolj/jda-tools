@@ -128,7 +128,7 @@ impl Function {
         Ok(())
     }
 
-    pub fn read__detailed_description(&mut self,
+    pub fn read_detailed_description(&mut self,
         parser: &mut EventReader<BufReader<File>>,
     ) -> Result<(), std::io::Error> {
         let mut depth = 0;
@@ -246,7 +246,7 @@ impl Function {
                             "type" => func.ret_type = Some(read_characters_only(parser)?),
                             "name" => func.name = read_characters_only(parser)?,
                             "briefdescription" => func.brief = Some(read_description(parser)?),
-                            "detaileddescription" => func.read__detailed_description(parser)?,
+                            "detaileddescription" => func.read_detailed_description(parser)?,
                             "param" => func.read_param(parser)?,
                             "location" => {
                                 func.location = Some(Location::read(attributes));

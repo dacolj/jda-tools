@@ -3,31 +3,47 @@ use crate::class::*;
 use crate::common::*;
 use std::fs::File;
 use std::io::prelude::*;
-pub struct ErrorWriter {
+pub struct CsvErrorWriter {
     pub file: File,
 }
+pub trait ErrorWriter {
+    fn append(&mut self, error: String, location: &Option<Location>) -> Result<(), std::io::Error>;
+}
 
-impl ErrorWriter {
-    pub fn new(filename: &str) -> Result<ErrorWriter, std::io::Error> {
-        Ok(ErrorWriter {
+impl CsvErrorWriter {
+    pub fn new(filename: &str) -> Result<CsvErrorWriter, std::io::Error> {
+        Ok(CsvErrorWriter {
             file: File::create(filename)?,
         })
     }
-
+}
+impl ErrorWriter for CsvErrorWriter {
     fn append(&mut self, error: String, location: &Option<Location>) -> Result<(), std::io::Error> {
         self.file.write_fmt(format_args!("{};", error))?;
-        if location.is_some() {
-            let loc = location.as_ref().unwrap();
-            if loc.file.is_some() {
-                self.file.write_fmt(format_args!(
-                    "{};{};",
-                    loc.file.as_ref().unwrap(),
-                    loc.line
-                ))?;
-            }
-        }
+        match location {
+            Some(loc) => self
+                .file
+                .write_fmt(format_args!("{};{};\n", loc.file, loc.line))?,
+            None => self.file.write_all(b";;\n")?,
+        };
+        Ok(())
+    }
+}
 
-        self.file.write(b"\n")?;
+pub struct VisualErrorWriter {}
+
+impl ErrorWriter for VisualErrorWriter {
+    fn append(&mut self, error: String, location: &Option<Location>) -> Result<(), std::io::Error> {
+        match location {
+            Some(loc) => println!(
+                "{filename}({line}):{level}:{text}\n",
+                filename = loc.file,
+                line = loc.line,
+                level = "warning",
+                text = error
+            ),
+            None => println!(":{level}:{text}\n", level = "warning", text = error),
+        };
 
         Ok(())
     }
@@ -60,10 +76,8 @@ fn check_attribute_name(attribute: &Attribute, class_name: &str) {
     }
 }
 
-pub fn check_class(
-    class: &Class,
-    error_writer: &mut ErrorWriter,
-) -> Result<(), std::io::Error> {
+pub fn check_class(class: &Class, error_writer: &mut ErrorWriter) -> Result<(), std::io::Error> {
+    println!("Checking class {}...", class.name);
     for a in &class.attributes {
         check_attribute_name(&a, class.name.as_str());
         if a.brief == Option::None {

@@ -94,9 +94,13 @@ impl Class {
     ) -> Result<(), std::io::Error> {
         loop {
             match parser.next() {
-                Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => {
+                Ok(XmlEvent::StartElement {
+                    ref name,
+                    ref attributes,
+                    ..
+                }) => {
                     if name.local_name == "memberdef" {
-                        self.functions.push(Function::read( parser, attributes)?);
+                        self.functions.push(Function::read(parser, attributes)?);
                     }
                 }
                 Ok(XmlEvent::EndElement { ref name }) => {
@@ -134,7 +138,8 @@ impl Class {
                             self.read_attributes(parser)?;
                         } else if kind.contains("-func") {
                             self.read_functions(parser)?;
-                        } else if kind.contains("-type"){
+                        } else if kind.contains("-type") {
+                        } else if kind == "friend" {
                         } else {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
