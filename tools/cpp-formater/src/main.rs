@@ -8,7 +8,7 @@ use std::io::ErrorKind;
 use std::io::{BufReader, Read, Write};
 use std::process::Command;
 
-const CPP_EXT: &'static [&str] = &["cpp", "hpp", "tpp", "h", "c"];
+const CPP_EXT: &'static [&str] = &[".cpp", ".hpp", ".tpp", ".h", ".c"];
 
 fn process_file(filename: &str, verbose: bool) {
     let mut processed = true;
@@ -128,7 +128,7 @@ fn main() {
             Arg::with_name("format all")
                 .long("all")
                 .short("a")
-                .help("Verbose output")
+                .help("Format all")
                 .takes_value(false),
         )
         .arg(
