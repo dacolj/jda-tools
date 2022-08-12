@@ -8,22 +8,19 @@ use std::io::ErrorKind;
 use std::io::{BufReader, Read, Write};
 use std::process::Command;
 
-const CPP_EXT: &'static [&str] = &[".cpp", ".hpp", ".tpp", ".h", ".c"];
+const CPP_EXT: &'static str =".cpp,.hpp,.tpp,.h,.c,ipp";
 
-fn process_file(filename: &str, verbose: bool) {
-    let mut processed = true;
-    for ext in CPP_EXT.iter() {
+struct Config {
+    verbose: bool,
+    dry_run: bool,
+    extensions: Vec<String>
+}
+
+fn process_file(filename: &str, config: &Config) {
+    for ext in config.extensions.iter() {
         if filename.ends_with(ext) {
-            processed = true;
-            match format_file(filename) {
-                Ok(FormatResult::NoChanges) => {
-                    if verbose {
-                        println!("No changes: {}", filename);
-                    }
-                }
-                Ok(FormatResult::Formated) => {
-                    println!("Formated: {}", filename);
-                }
+            match format_file(filename, &config) {
+                Ok(_) => {}
                 Err(error) => {
                     println!("Error {} on file {}", error, filename)
                 }
@@ -31,12 +28,9 @@ fn process_file(filename: &str, verbose: bool) {
             break;
         }
     }
-    if !processed && verbose {
-        println!("Not a cpp file: {}", filename);
-    }
 }
 
-fn process_path(input: &str, verbose: bool) {
+fn process_path(input: &str, config: &Config) {
     let md = metadata(input);
     if md.is_err() {
         println!("Unknown directory or file: {}", input);
@@ -47,13 +41,13 @@ fn process_path(input: &str, verbose: bool) {
         let paths = fs::read_dir(input).unwrap();
         for path in paths {
             if path.is_ok() {
-                process_path(path.unwrap().path().to_str().unwrap(), verbose);
+                process_path(path.unwrap().path().to_str().unwrap(), config);
             }
         }
     } else if md.is_file() {
-        process_file(input, verbose);
+        process_file(input, &config);
     } else {
-        if verbose {
+        if config.verbose {
             println!("Given directory or file is invalid {}", input);
         }
     }
@@ -79,12 +73,8 @@ fn get_file_hash(filename: &str) -> Result<Digest, std::io::Error> {
     let reader = BufReader::new(input);
     sha256_digest(reader)
 }
-enum FormatResult {
-    NoChanges,
-    Formated,
-}
 
-fn format_file(filename: &str) -> Result<FormatResult, std::io::Error> {
+fn format_file(filename: &str, config: &Config) -> Result<(), std::io::Error> {
     let output = Command::new("clang-format.exe").arg(&filename).output()?;
     match output.status.code() {
         Some(code) => {
@@ -94,13 +84,18 @@ fn format_file(filename: &str) -> Result<FormatResult, std::io::Error> {
                 let new_hash = sha256_digest(&output.stdout[..])?;
                 //println!("New hash {:?}", new_hash);
                 if old_hash.as_ref() == new_hash.as_ref() {
-                    return Ok(FormatResult::NoChanges);
+                    if config.verbose {
+                        println!("No changes: {}", filename);
+                    }
+                } else if config.dry_run {
+                    println!("Will format: {}", filename);
                 } else {
+                    println!("Formated: {}", filename);
                     let mut file = File::create(&filename)?;
                     file.write_all(&output.stdout[..])?;
                     drop(file);
-                    return Ok(FormatResult::Formated);
                 }
+                return Ok(());
             } else {
                 return Err(std::io::Error::new(
                     ErrorKind::Other,
@@ -138,16 +133,42 @@ fn main() {
                 .help("Verbose output")
                 .takes_value(false),
         )
+        .arg(
+            Arg::with_name("dry run")
+                .long("dry-run")
+                .short("d")
+                .help("Don't write files, just show what would be done")
+                .takes_value(false),
+        ).arg(
+            Arg::with_name("extensions")
+                .long("extensions")
+                .short("e")
+                .help(format!("Extensions to manges, default \"{}\"", CPP_EXT).as_str())
+                .takes_value(false),
+        )
         .get_matches();
 
     let input = matches.value_of("input").unwrap_or(".");
-    let verbose = matches.is_present("verbose");
+
+    let extensions: Vec<String> = match matches.value_of("extensions") {
+        Some(value) =>{
+            value
+        }
+        None => CPP_EXT,
+    }.split(',').map(String::from).collect();
+
+    let config = Config {
+        verbose: matches.is_present("verbose"),
+        dry_run: matches.is_present("dry run"),
+        extensions: extensions,
+    };
+
     let all = matches.is_present("format all");
 
     if all {
-        process_path(input, verbose);
+        process_path(input, &config);
     } else {
-        if verbose {
+        if config.verbose {
             println!("Checking index from {:?}", input);
         }
 
@@ -158,20 +179,28 @@ fn main() {
             .statuses(Option::None)
             .expect("Failed to retrieve repository status");
 
-        if verbose {
+        if config.verbose {
             println!("Formating...");
         }
 
+        println!("Hello");
         for d in index.iter() {
             let status = d.status();
-            //println!("val {:?} file {}", status, d.path().unwrap());
-            if !(status & (Status::INDEX_MODIFIED | Status::INDEX_NEW)).is_empty() {
+            if !(status
+                & (Status::WT_RENAMED
+                    | Status::WT_NEW
+                    | Status::WT_MODIFIED
+                    | Status::INDEX_MODIFIED
+                    | Status::INDEX_NEW
+                    | Status::INDEX_RENAMED))
+                .is_empty()
+            {
                 let filename = d.path().unwrap();
                 match metadata(&filename) {
                     Ok(m) => {
                         if m.is_file() {
-                            process_file(filename, verbose);
-                        } else if verbose {
+                            process_file(filename, &config);
+                        } else if config.verbose {
                             println!("Not a file: {}", filename);
                         }
                     }
@@ -180,7 +209,7 @@ fn main() {
             }
         }
     }
-    if verbose {
+    if config.verbose {
         println!("Finished");
     }
 }
