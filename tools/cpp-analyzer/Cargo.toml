@@ -1,6 +1,6 @@
 [package]
-name = "analyser"
-version = "0.1.0"
+name = "cpp-analyzer"
+version = "0.2.0"
 authors = ["Jean DA COL <dacolj@outlook.fr>"]
 edition = "2018"
 
