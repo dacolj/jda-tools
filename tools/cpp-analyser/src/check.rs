@@ -8,6 +8,7 @@ pub struct CsvErrorWriter {
 }
 pub trait ErrorWriter {
     fn append(&mut self, error: String, location: &Option<Location>) -> Result<(), std::io::Error>;
+    fn name(&self) -> &'static str;
 }
 
 impl CsvErrorWriter {
@@ -28,11 +29,15 @@ impl ErrorWriter for CsvErrorWriter {
         };
         Ok(())
     }
+
+    fn name(&self) -> &'static str {
+        "CSV"
+    }
 }
 
-pub struct VisualErrorWriter {}
+pub struct VisualStudioErrorWriter {}
 
-impl ErrorWriter for VisualErrorWriter {
+impl ErrorWriter for VisualStudioErrorWriter {
     fn append(&mut self, error: String, location: &Option<Location>) -> Result<(), std::io::Error> {
         match location {
             Some(loc) => println!(
@@ -47,40 +52,141 @@ impl ErrorWriter for VisualErrorWriter {
 
         Ok(())
     }
-}
 
-fn check_attribute_name(attribute: &Attribute, class_name: &str) {
-    if attribute.is_static {
-        if attribute.ctype.starts_with("const") {
-            if !attribute.name.chars().next().unwrap().is_uppercase() {
-                println!(
-                    "Static const attribute {} of class {} should start with an upper case letter",
-                    attribute.name, class_name
-                );
-            }
-        } else {
-            if !attribute.name.starts_with("_s") {
-                println!(
-                    "Static attribute {} of class {} should start with a s_",
-                    attribute.name, class_name
-                );
-            }
-        }
-    } else {
-        if !attribute.name.starts_with("m_") {
-            println!(
-                "Attribute {} of class {} should start with a m_",
-                attribute.name, class_name
-            );
-        }
+    fn name(&self) -> &'static str {
+        "Visual-Studio"
     }
 }
 
-pub fn check_class(class: &Class, error_writer: &mut ErrorWriter) -> Result<(), std::io::Error> {
-    println!("Checking class {}...", class.name);
+fn check_attribute_name(
+    error_writer: &mut dyn ErrorWriter,
+    attribute: &Attribute,
+    class: &Class,
+) -> Result<(), std::io::Error> {
+    if attribute.is_static {
+        if attribute.ctype.starts_with("const") {
+            if !attribute.name.chars().next().unwrap().is_uppercase() {
+                error_writer.append(
+                    format!(
+                        "Static const attribute {} of {} {} should start with an upper case letter",
+                        attribute.name,
+                        class.object_type(),
+                        class.name
+                    ),
+                    &attribute.location,
+                )?;
+            }
+        } else {
+            if !attribute.name.starts_with("s_") {
+                error_writer.append(
+                    format!(
+                        "Static attribute {} of {} {} should start with a s_",
+                        attribute.name,
+                        class.object_type(),
+                        class.name
+                    ),
+                    &attribute.location,
+                )?;
+            }
+        }
+    } else {
+        if !class.is_struct && !attribute.name.starts_with("m_") {
+            error_writer.append(
+                format!(
+                    "Attribute {} of class {} should start with a m_",
+                    attribute.name, class.name
+                ),
+                &attribute.location,
+            )?;
+        }
+        //  else if class.is_struct && attribute.name.starts_with("m_") {
+        //     println!(
+        //         "Attribute {} of struct {} should not start with a m_",
+        //         attribute.name, class.name
+        //     );
+        // }
+    }
+    Ok(())
+}
+
+pub fn check_class(
+    class: &Class,
+    error_writer: &mut dyn ErrorWriter,
+) -> Result<(), std::io::Error> {
+    //println!("Checking class {}...", class.name);
+
+    assert!(!class.name.is_empty());
+
+    let pos = match class.name.rfind(':'){
+       Some(p) => std::cmp::min(p + 1, class.name.len() - 1),
+       None => 0,
+    };
+    if !class.name.chars().nth(pos).unwrap().is_uppercase() {
+        error_writer.append(
+            format!(
+                "Name of class {} should start with an upper case letter",
+                class.name
+            ),
+            &class.location,
+        )?;
+    }
+    if class.brief.is_none() && class.detailed.is_none() {
+        error_writer.append(
+            format!("Class {} has no description", class.name),
+            &class.location,
+        )?;
+    }
+
+    for enumerated in &class.enums {
+        assert!(!enumerated.name.is_empty());
+
+        let pos = match enumerated.name.rfind(':'){
+        Some(p) => std::cmp::min(p + 1, enumerated.name.len() - 1),
+        None => 0,
+        };
+
+        if !enumerated.name.chars().nth(pos).unwrap().is_uppercase() {
+            error_writer.append(
+                format!(
+                    "Name of enum {} should start with an upper case letter",
+                    enumerated.full_name
+                ),
+                &enumerated.location,
+            )?;
+        }
+
+        if enumerated.brief.is_none() {
+            error_writer.append(
+                format!("Enum {} has no description", enumerated.full_name),
+                &enumerated.location,
+            )?;
+        }
+
+        for value in &enumerated.values {
+            if value.brief.is_none() {
+                error_writer.append(
+                    format!(
+                        "Value {} of enum {} has not decription",
+                        value.name, enumerated.full_name
+                    ),
+                    &enumerated.location,
+                )?;
+            }
+            if !value.name.chars().next().unwrap().is_uppercase() {
+                error_writer.append(
+                    format!(
+                        "Value {} of enum {} should start with an upper case letter",
+                        value.name, enumerated.full_name
+                    ),
+                    &enumerated.location,
+                )?;
+            }
+        }
+    }
+
     for a in &class.attributes {
-        check_attribute_name(&a, class.name.as_str());
-        if a.brief == Option::None {
+        check_attribute_name(error_writer, &a, &class)?;
+        if a.brief == Option::None && a.detailed == Option::None {
             error_writer.append(
                 format!(
                     "Attribute {} of class {} should have a description",
@@ -89,7 +195,7 @@ pub fn check_class(class: &Class, error_writer: &mut ErrorWriter) -> Result<(), 
                 &a.location,
             )?;
         }
-        if a.access == Access::Public {
+        if a.access == Access::Public && !class.is_struct {
             // add is_const
             error_writer.append(
                 format!(
@@ -102,7 +208,7 @@ pub fn check_class(class: &Class, error_writer: &mut ErrorWriter) -> Result<(), 
     }
 
     for f in &class.functions {
-        if f.description == Option::None && f.brief == Option::None {
+        if f.detailed == Option::None && f.brief == Option::None {
             error_writer.append(
                 format!(
                     "Function {} of class {} should have a description",

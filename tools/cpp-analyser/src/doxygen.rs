@@ -1,27 +1,11 @@
-use chrono::{Datelike, Timelike, Utc};
+use chrono::Utc;
 use std::env;
 use std::fs::OpenOptions;
 use std::fs::{self};
-use std::fs::{write, File};
 use std::io::Write;
 use std::io::{Error, ErrorKind};
 use std::process::Command;
 use std::str::FromStr;
-use std::time::SystemTime;
-
-pub fn find_class_xml_files(path: &str) -> Vec<String> {
-    let mut vec = Vec::<String>::new();
-    let paths = fs::read_dir(path).unwrap();
-    for path in paths {
-        if path.is_ok() {
-            let value = String::from_str(path.unwrap().path().to_str().unwrap()).unwrap();
-            if value.ends_with(".xml") && value.contains("class_") {
-                vec.push(value);
-            }
-        }
-    }
-    vec
-}
 
 pub fn generate_doxyfile(
     input: &Vec<String>,
@@ -43,7 +27,10 @@ pub fn generate_doxyfile(
     println!("Generating Doxyfile {:?}", temp_file);
 
     //let mut file = File::open(&temp_file).unwrap();
-    let mut file = OpenOptions::new().write(true).create(true).open(&temp_file)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(&temp_file)?;
     write!(&mut file, "{}", INPUT).unwrap();
     for val in input.iter() {
         write!(&mut file, "{} ", val.as_str()).unwrap();

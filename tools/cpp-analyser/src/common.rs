@@ -15,7 +15,6 @@ pub enum Access {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Direction {
-    Unknown,
     In,
     Out,
     InOut,
@@ -48,20 +47,25 @@ impl Parameter {
 
 pub fn read_characters_only(
     parser: &mut EventReader<BufReader<File>>,
-) -> Result<String, std::io::Error> {
-    let mut a: String = String::new();
+) -> Result<Option<String>, std::io::Error> {
+    let mut a: Option<String> = Option::None;
     let mut depth = 0;
     loop {
         match parser.next() {
             Ok(XmlEvent::Characters(ref chars)) => {
-                if depth == 0 {
-                    a = chars.to_string().clone();
+                //if depth == 0 {
+                if !chars.is_empty() {
+                    match a {
+                        Some(val) => a = Some(format!("{} {}", val, chars.to_string())),
+                        None => a = Some(chars.to_string().clone()),
+                    }
                 }
+                //}
             }
-            Ok(XmlEvent::StartElement {  ref name, .. }) => {
+            Ok(XmlEvent::StartElement { .. }) => {
                 depth += 1;
             }
-            Ok(XmlEvent::EndElement {  ref name }) => {
+            Ok(XmlEvent::EndElement { .. }) => {
                 if depth == 0 {
                     break;
                 }
@@ -69,7 +73,7 @@ pub fn read_characters_only(
             }
             Ok(XmlEvent::CData(ref s)) => println!("CDATA {}", s),
             Ok(XmlEvent::Comment(ref s)) => println!("Comment {}", s),
-            Ok(XmlEvent::Whitespace(ref s)) => {},// println!("Whitespace {}", s),
+            Ok(XmlEvent::Whitespace(..)) => {} // println!("Whitespace {}", s),
             Ok(XmlEvent::EndDocument) => println!("end doc"),
             Ok(XmlEvent::ProcessingInstruction { ref name, ref data }) => {
                 println!("Processing instruction {} {:?}", name, data)
@@ -94,18 +98,20 @@ pub fn read_characters_only(
 
 pub fn read_description(
     parser: &mut EventReader<BufReader<File>>,
-) -> Result<String, std::io::Error> {
-    let mut a: String = String::new();
+) -> Result<Option<String>, std::io::Error> {
+    let mut a: Option<String> = Option::None;
+    let mut depth = 0;
     loop {
-        let mut depth = 0;
         match parser.next() {
-            Ok(XmlEvent::StartElement {
-                ref name,
-                ref attributes,
-                ..
-            }) => {
+            Ok(XmlEvent::StartElement { ref name, .. }) => {
                 if name.local_name == "para" {
-                    a = format!("{}\n{}", a, read_characters_only(parser)?);
+                    let read = read_characters_only(parser)?;
+                    if read.is_some() {
+                        match a {
+                            Some(val) => a = Some(format!("{}\n{}", val, read.unwrap())),
+                            None => a = read,
+                        }
+                    }
                 } else {
                     depth += 1;
                 }
@@ -134,18 +140,10 @@ pub fn read_description(
             _ => {}
         }
     }
-
     Ok(a)
 }
 
 impl Location {
-    fn new() -> Location {
-        Location {
-            file: String::new(),
-            line: -1,
-        }
-    }
-
     pub fn read(attributes: &Vec<OwnedAttribute>) -> Location {
         let line = match attributes.iter().find(|&r| r.name.local_name == "line") {
             Some(val) => val.value.to_string().parse::<i32>().unwrap_or(-2),

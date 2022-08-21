@@ -33,13 +33,13 @@ impl Attribute {
 
     pub fn read(
         parser: &mut EventReader<BufReader<File>>,
-        xml_attributes: &Vec<OwnedAttribute>
+        xml_attributes: &Vec<OwnedAttribute>,
     ) -> Result<Attribute, std::io::Error> {
         let mut attr = Attribute::new();
 
         attr.is_static = read_xml_attribute(xml_attributes, "static").unwrap_or_default() == "yes";
-        attr.access = match read_xml_attribute(xml_attributes, "prot"){
-            Some(val)=> access_from_str(val.as_str()).unwrap_or(Access::Private),
+        attr.access = match read_xml_attribute(xml_attributes, "prot") {
+            Some(val) => access_from_str(val.as_str()).unwrap_or(Access::Private),
             None => Access::Private,
         };
 
@@ -50,10 +50,10 @@ impl Attribute {
                     ref attributes,
                     ..
                 }) => match name.local_name.as_str() {
-                    "type" => attr.ctype = read_characters_only(parser)?,
-                    "name" => attr.name = read_characters_only(parser)?,
-                    "briefdescription" => attr.brief = Some(read_description(parser)?),
-                    "detaileddescription" => attr.detailed = Some(read_description(parser)?),
+                    "type" => attr.ctype = read_characters_only(parser)?.unwrap_or_default(),
+                    "name" => attr.name = read_characters_only(parser)?.unwrap_or_default(),
+                    "briefdescription" => attr.brief = read_description(parser)?,
+                    "detaileddescription" => attr.detailed = read_description(parser)?,
                     "location" => attr.location = Some(Location::read(attributes)),
                     _ => {}
                 },
