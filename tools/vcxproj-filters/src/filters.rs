@@ -435,6 +435,9 @@ fn write_filters(filters: &Filters, filename: &str) -> Result<(), std::io::Error
     write!(buffer, "  </ItemGroup>\r\n")?;
 
     for group in &filters.item_groups {
+        if group.entries.is_empty(){
+            continue;
+        }
         write!(buffer, "  <ItemGroup>\r\n")?;
         for e in &group.entries {
             if e.used {
