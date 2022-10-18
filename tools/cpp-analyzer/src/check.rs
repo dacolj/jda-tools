@@ -195,7 +195,7 @@ pub fn check_class(
                 &a.location,
             )?;
         }
-        if a.access == Access::Public && !class.is_struct {
+        if a.access == Access::Public && !class.is_struct && !a.is_static {
             // add is_const
             error_writer.append(
                 format!(

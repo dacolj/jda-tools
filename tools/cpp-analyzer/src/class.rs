@@ -195,6 +195,7 @@ impl Class {
                         } else if kind.ends_with("-type") {
                             self.read_types(parser)?;
                         } else if kind == "friend" {
+                        } else if kind == "property" {
                         } else if kind == "signal" {
                             self.read_functions(parser)?;
                         } else if kind == "related" {

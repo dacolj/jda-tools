@@ -1,4 +1,5 @@
 use rand::Rng;
+use std::cmp::Ordering;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -24,21 +25,25 @@ struct Filter {
 struct Group {
     entries: Vec<Entry>,
     ext: String,
+    kind: String,
 }
 
 impl Group {
-    fn new() -> Group {
+    fn new(kind : String) -> Group {
         Group {
             entries: vec![],
             ext: String::new(),
+            kind: kind,
         }
     }
 
     fn from_vec(vec: Vec<Entry>) -> Group {
         let ext = get_extension(vec[0].file.as_str()).unwrap();
+        let kind = vec[0].kind.clone();
         Group {
             entries: vec,
             ext: ext,
+            kind: kind,
         }
     }
 }
@@ -100,7 +105,7 @@ fn read_filters<R: std::io::BufRead>(stream: &mut R) -> Result<Filters, std::io:
                         state = State::FilterGroup;
                     } else {
                         state = State::ItemGroup;
-                        data.item_groups.push(Group::new());
+                        data.item_groups.push(Group::new(name.local_name.clone()));
                     }
                 }
                 match state {
@@ -306,9 +311,8 @@ impl Filters {
     }
 
     fn add_filter(&mut self, entry: &Entry) {
-        if entry.filter.as_ref().is_some(){
-            let a = entry.filter.as_ref().unwrap();
-            self.add_filter_only(&a);
+        if entry.filter.as_ref().is_some() {
+            self.add_filter_only(entry.filter.as_ref().unwrap());
         }
 
         let mut found = false;
@@ -326,10 +330,12 @@ impl Filters {
             }
         }
         if !found {
-            found = false;
-            let ext = get_extension(entry.file.as_str()).unwrap();
+            //let ext = get_extension(entry.file.as_str()).unwrap();
+            let kind = &entry.kind;
+
             for group in &mut self.item_groups {
-                if ext == get_extension(group.entries[0].file.as_str()).unwrap() {
+                //if ext == get_extension(group.entries[0].file.as_str()).unwrap() {
+                if kind == &group.kind {
                     group.entries.push(Entry {
                         kind: entry.kind.clone(),
                         file: entry.file.clone(),
@@ -340,7 +346,7 @@ impl Filters {
                 }
             }
             if !found {
-                self.item_groups.push(Group::new());
+                self.item_groups.push(Group::new(entry.kind.clone()));
                 self.item_groups.last_mut().unwrap().entries.push(Entry {
                     kind: entry.kind.clone(),
                     file: entry.file.clone(),
@@ -368,7 +374,7 @@ fn generate_new_filters(
         filters: vec![],
         item_groups: vec![],
     };
-
+    old_filters.item_groups.clear();
     for entry in files {
         old_filters.add_filter(entry);
     }
@@ -404,7 +410,13 @@ fn generate_new_filters(
     }
 
     if sort {
-        new_filters.item_groups.sort_by(|a, b| a.ext.cmp(&b.ext));
+        new_filters
+            .item_groups
+            .sort_by(|a, b| match a.ext.cmp(&b.ext) {
+                Ordering::Less => Ordering::Less,
+                Ordering::Greater => Ordering::Greater,
+                Ordering::Equal => a.kind.cmp(&b.kind),
+            });
 
         new_filters.filters.sort_by(|a, b| a.path.cmp(&b.path));
     }
@@ -435,7 +447,7 @@ fn write_filters(filters: &Filters, filename: &str) -> Result<(), std::io::Error
     write!(buffer, "  </ItemGroup>\r\n")?;
 
     for group in &filters.item_groups {
-        if group.entries.is_empty(){
+        if group.entries.is_empty() {
             continue;
         }
         write!(buffer, "  <ItemGroup>\r\n")?;
@@ -453,7 +465,7 @@ fn write_filters(filters: &Filters, filename: &str) -> Result<(), std::io::Error
         }
         write!(buffer, "  </ItemGroup>\r\n")?;
     }
-    write!(buffer, "</Project>\r\n")?;
+    write!(buffer, "</Project>")?;
 
     Ok(())
 }
