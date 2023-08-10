@@ -1,6 +1,6 @@
 [package]
 name = "filters"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Jean"]
 edition = "2018"
 

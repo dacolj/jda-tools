@@ -477,9 +477,9 @@ fn urn_uuid() -> String {
         .set_version(Version::Random)
         .build();
     let mut buf = [b'!'; 49];
-    uuid.to_urn().encode_lower(&mut buf);
+    let data = uuid.to_hyphenated().encode_lower(&mut buf);
 
-    format!("{{{}}}", str::from_utf8(&buf[9..41]).unwrap())
+    format!("{{{}}}", data)
 }
 
 pub fn apply(
