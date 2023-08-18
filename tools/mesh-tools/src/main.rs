@@ -1,5 +1,5 @@
-use clap::{Arg, Command};
 use byteorder::ReadBytesExt;
+use clap::{Arg, Command};
 use rand::Rng;
 use std::collections::HashMap;
 use std::fs::File;
@@ -169,76 +169,58 @@ fn export_cloud_with_shift(
     Ok(())
 }
 
-fn sample_point(mesh: &Mesh, sample_count: usize) -> Result<Cloud, std::io::Error> {
-    #[derive(Clone)]
-    struct Data {
-        frac: f64,
-        surface: f64,
-        samples_assigned: u32,
-        original_id: usize,
-    }
-
-    let mut data: Vec<Data> = vec![];
-    data.reserve_exact(mesh.triangles.len());
-
+fn sample_point(mesh: &Mesh, sample_count: usize, verbose: bool) -> Result<Cloud, std::io::Error> {
     // Compute mesh surface
     let mut total_surface = 0.0;
     for idx in 0..mesh.triangles.len() {
         let triangle = &mesh.triangles[idx];
-        let d = {
-            let origin = &mesh.vertices[triangle[0]];
-            let v1 = mesh.vertices[triangle[1]] - origin;
-            let v2 = mesh.vertices[triangle[2]] - origin;
-            let s = v1.cross(&v2).norm() / 2.0;
-            Data {
-                frac: 0.0,
-                surface: s,
-                samples_assigned: 0,
-                original_id: idx,
-            }
-        };
-        total_surface += d.surface;
-        data.push(d);
+        let origin = &mesh.vertices[triangle[0]];
+        let v1 = mesh.vertices[triangle[1]] - origin;
+        let v2 = mesh.vertices[triangle[2]] - origin;
+        total_surface += v1.cross(&v2).norm();
     }
+    total_surface /= 2.0;
 
+    let mut rng = rand::thread_rng();
     let density = (sample_count as f64) / total_surface;
-    let mut assigned = 0;
-    for data in data.iter_mut() {
-        data.frac = data.surface * density;
-        data.samples_assigned = (data.frac) as u32;
-        data.frac = data.frac - (data.samples_assigned as f64);
-        assigned += data.samples_assigned;
-        // if data.samples_assigned > 0{
-        //     println!("target {} ({})", data.samples_assigned, data.frac);
-        // }
+
+    if verbose {
+        println!("Surface {}", total_surface);
+        println!("Density {}", density);
     }
-    let start: Instant = Instant::now();
-    data.sort_by(|a, b| b.frac.partial_cmp(&a.frac).unwrap());
-    println!("Sort time: {:?}", start.elapsed());
 
     let mut vertices: Vec<Point3<f64>> = vec![];
     vertices.reserve_exact(sample_count);
     let mut normals: Vec<Vector3<f64>> = vec![];
     normals.reserve_exact(sample_count);
 
-    let mut rng = rand::thread_rng();
-    for data in data.iter_mut() {
-        if assigned != sample_count as u32 {
-            assigned += 1;
-            data.samples_assigned += 1;
-        }
-
-        let triangle = mesh.triangles[data.original_id];
+    let mut assigned = 0;
+    for idx in 0..mesh.triangles.len() {
+        let triangle = &mesh.triangles[idx];
         let origin = &mesh.vertices[triangle[0]];
         let v1 = mesh.vertices[triangle[1]] - origin;
         let v2 = mesh.vertices[triangle[2]] - origin;
+        let surface = v1.cross(&v2).norm() / 2.0;
+
+        let samples_assigned = {
+            let frac = surface * density;
+            let samples_assigned = frac as u32;
+            if (frac - (samples_assigned as f64)) >= rng.gen::<f64>() {
+                samples_assigned + 1
+            } else {
+                samples_assigned
+            }
+        };
+
+        assigned += samples_assigned;
+
 
         let tri_normals = [
             &mesh.normals[triangle[0]],
             &mesh.normals[triangle[1]],
             &mesh.normals[triangle[2]],
         ];
-        for _ in 0..data.samples_assigned {
+        for _ in 0..samples_assigned {
             let mut s = rng.gen::<f64>();
             let mut t = rng.gen::<f64>();
             if s + t > 1.0 {
@@ -246,13 +228,21 @@ fn sample_point(mesh: &Mesh, sample_count: usize) -> Result<Cloud, std::io::Erro
                 t = 1.0 - t;
             }
             let pt = origin + s * v1 + t * v2;
-            let normal: Vector3<f64> =((1.0 - s - t) * tri_normals[0] + s * tri_normals[1] + t * tri_normals[2]).normalize();
+            let normal: Vector3<f64> =
+                ((1.0 - s - t) * tri_normals[0] + s * tri_normals[1] + t * tri_normals[2])
+                    .normalize();
             vertices.push(pt);
             normals.push(normal);
         }
     }
 
-    println!("assigned {}", assigned);
+    if verbose {
+        println!(
+            "Generate {} sample, initial requested {}",
+            assigned, sample_count
+        );
+    }
+
     Ok(Cloud {
         vertices: vertices,
         normals: normals,
@@ -261,56 +251,70 @@ fn sample_point(mesh: &Mesh, sample_count: usize) -> Result<Cloud, std::io::Erro
 
 fn main() {
     let matches = Command::new("mesh_tools")
-    .arg(
-        Arg::new("input")
-            .help("Input file")
-            .required(true)
-            .short('i'),
-    )
-    .arg(
-        Arg::new("output")
-            .help("Output file")
-            .required(true)
-            .short('o'),
-    )
-    .arg(
-        Arg::new("subsample")
-            .help("subsample")
-            .required(true)
-            .value_parser(clap::value_parser!(usize))
-            .short('s'),
-    )
-    .arg(
-        Arg::new("offset")
-            .help("offset")
-            .required(true)
-            .value_parser(clap::value_parser!(f64))
-            .short('f'),
-    )
-    .get_matches();
+        .arg(
+            Arg::new("input")
+                .help("Input file")
+                .required(true)
+                .short('i'),
+        )
+        .arg(
+            Arg::new("output")
+                .help("Output file")
+                .required(true)
+                .short('o'),
+        )
+        .arg(
+            Arg::new("subsample")
+                .help("subsample")
+                .required(true)
+                .value_parser(clap::value_parser!(usize))
+                .short('s'),
+        )
+        .arg(
+            Arg::new("offset")
+                .help("offset")
+                .required(false)
+                .value_parser(clap::value_parser!(f64))
+                .short('f'),
+        )
+        .arg(
+            Arg::new("verbose")
+                .help("versose")
+                .required(false)
+                .action(clap::ArgAction::SetTrue)
+                .short('v'),
+        )
+        .get_matches();
 
     let input_filename = matches.get_one::<String>("input").unwrap();
     let output_filename = matches.get_one::<String>("output").unwrap();
     let samples_count = matches.get_one::<usize>("subsample").unwrap();
-    let offset = matches.get_one::<f64>("offset").unwrap();
-
+    let offset = matches.get_one::<f64>("offset");
+    let verbose = matches.get_flag("verbose");
 
     let start: Instant = Instant::now();
     let mut mesh = load_stl(input_filename.as_str()).unwrap();
-    println!("Load time: {:?}", start.elapsed());
-    println!("Polygone count: {}", mesh.triangles.len());
-    println!("Vertex count: {}", mesh.vertices.len());
+    if verbose {
+        println!("Load time: {:?}", start.elapsed());
+        println!("Polygone count: {}", mesh.triangles.len());
+        println!("Vertex count: {}", mesh.vertices.len());
+    }
 
     let start: Instant = Instant::now();
     mesh.normals = compute_normal_per_vertex(&mesh);
-    println!("Per vertex normal compuration time: {:?}", start.elapsed());
+    if verbose {
+        println!("Per vertex normal computation time: {:?}", start.elapsed());
+    }
 
     let start: Instant = Instant::now();
-    let cloud = sample_point(&mesh, *samples_count).unwrap();
-    println!("Sampling time: {:?}", start.elapsed());
+    let cloud = sample_point(&mesh, *samples_count, verbose).unwrap();
+    if verbose {
+        println!("Sampling time: {:?}", start.elapsed());
+    }
 
     let start: Instant = Instant::now();
-    export_cloud_with_shift(output_filename.as_str(), &cloud, *offset).unwrap();
-    println!("Save time: {:?}", start.elapsed());
-    println!("Done!");
+    export_cloud_with_shift(output_filename.as_str(), &cloud, *offset.unwrap_or(&0.0)).unwrap();
+    if verbose {
+        println!("Save time: {:?}", start.elapsed());
+    }
 }
